@@ -2,11 +2,12 @@
 #![no_main]
 
 mod console;
-
+mod keyboard;
 use bootloader_api::info::PixelFormat;
 use bootloader_api::{entry_point, BootInfo};
 use console::{Color, Console};
 use core::fmt::Write;
+use keyboard::{Key, Keyboard};
 
 const OS_NAME: &str = "BootScope";
 const OS_VERSION: &str = "0.1.0";
@@ -55,10 +56,25 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         info.width, info.height, format, info.bytes_per_pixel);
     let _ = writeln!(console, "  Target  : x86_64, bare metal (no_std)");
 
-    console.set_color(Color::ACCENT);
-    let _ = writeln!(console, "\n  Welcome to BootScope!");
+    ok(&mut console, "Keyboard ready (PS/2, polling mode)");
 
-    halt_forever();
+    console.set_color(Color::ACCENT);
+    let _ = writeln!(console, "\n  Welcome to BootScope! Keyboard test - type something:");
+    console.set_color(Color::TEXT);
+    let _ = write!(console, "> ");
+
+    let mut keyboard = Keyboard::new();
+    loop {
+        match keyboard.read_key() {
+            Key::Char(c) => {
+                let _ = write!(console, "{c}");
+            }
+            Key::Enter => {
+                let _ = write!(console, "\n> ");
+            }
+            Key::Backspace => console.backspace(),
+        }
+    }
 }
 
 /// Print a green "[ OK ]" status line.

@@ -55,7 +55,17 @@ impl<'a> Console<'a> {
         self.x = MARGIN;
         self.y = MARGIN;
     }
-
+    /// Erase the last character on the current line.
+    pub fn backspace(&mut self) {
+        if self.x >= MARGIN + CHAR_WIDTH {
+            self.x -= CHAR_WIDTH;
+            for row in 0..CHAR_HEIGHT {
+                for col in 0..CHAR_WIDTH {
+                    self.put_pixel(self.x + col, self.y + row, Color::BACKGROUND);
+                }
+            }
+        }
+    }
     fn newline(&mut self) {
         self.x = MARGIN;
         self.y += LINE_HEIGHT;
