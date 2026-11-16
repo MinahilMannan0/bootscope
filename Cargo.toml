@@ -1,6 +1,6 @@
 [package]
 name = "bootscope"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 
 [workspace]
@@ -9,3 +9,8 @@ members = ["kernel"]
 [build-dependencies]
 bootloader = "0.11"
 kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
+
+# Compile the kernel with light optimization so screen drawing and the
+# boot-time integrity hash run quickly inside QEMU.
+[profile.dev.package.kernel]
+opt-level = 1

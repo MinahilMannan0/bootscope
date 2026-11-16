@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 
 [[bin]]
@@ -9,5 +9,9 @@ test = false
 bench = false
 
 [dependencies]
+# Defines how the bootloader hands control (and boot information) to us.
 bootloader_api = "0.11"
-noto-sans-mono-bitmap = "0.3"
+# Bitmap font. size_20 = bigger, readable text; bold = for headings.
+noto-sans-mono-bitmap = { version = "0.3", features = ["size_20", "bold"] }
+# The heap allocator algorithm (keeps a linked list of free memory blocks).
+linked_list_allocator = "0.10"

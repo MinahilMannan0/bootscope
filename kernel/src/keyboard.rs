@@ -5,9 +5,10 @@
 //!   0x60 = data port:   the byte itself (a "scancode")
 //! A scancode is a number for a physical key, not a letter. Pressing a key
 //! sends one code; releasing it sends the same code + 0x80.
-//! "Polling" means we keep asking the status port until a byte arrives.
+//! "Polling" means the kernel checks the status port on every pass of its
+//! main loop; between checks it runs the background tasks.
 
-use core::arch::asm;
+use crate::port::read_port;
 
 const DATA_PORT: u16 = 0x60;
 const STATUS_PORT: u16 = 0x64;
@@ -28,14 +29,12 @@ impl Keyboard {
         Keyboard { shift: false }
     }
 
-    /// Wait until a useful key is pressed, then return it.
-    pub fn read_key(&mut self) -> Key {
-        loop {
-            let scancode = wait_for_scancode();
-            if let Some(key) = self.decode(scancode) {
-                return key;
-            }
-        }
+    /// Check the keyboard once, without waiting.
+    /// Returns a key if one was pressed, otherwise None - so the kernel can do
+    /// other work (run tasks) while nobody is typing.
+    pub fn poll_key(&mut self) -> Option<Key> {
+        let scancode = try_read_scancode()?;
+        self.decode(scancode)
     }
 
     /// Turn a scancode into a Key. Returns None for keys we ignore
@@ -84,23 +83,14 @@ fn scancode_to_chars(scancode: u8) -> Option<(char, char)> {
     Some(pair)
 }
 
-/// Keep checking the status port until the keyboard has a byte for us.
-fn wait_for_scancode() -> u8 {
-    loop {
-        // SAFETY: ports 0x60/0x64 belong to the PS/2 controller; reading them
-        // has no effect on memory.
-        let status = unsafe { read_port(STATUS_PORT) };
-        if status & 0x01 != 0 {
-            return unsafe { read_port(DATA_PORT) };
-        }
-        core::hint::spin_loop(); // tell the CPU we are busy-waiting
+/// Read a scancode if the keyboard has one waiting.
+fn try_read_scancode() -> Option<u8> {
+    // SAFETY: ports 0x60/0x64 belong to the PS/2 controller; reading them
+    // has no effect on memory.
+    let status = unsafe { read_port(STATUS_PORT) };
+    if status & 0x01 != 0 {
+        Some(unsafe { read_port(DATA_PORT) })
+    } else {
+        None
     }
-}
-
-/// Read one byte from an I/O port with the x86 `in` instruction.
-/// Unsafe because talking to the wrong port could confuse hardware.
-unsafe fn read_port(port: u16) -> u8 {
-    let value: u8;
-    asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    value
 }
