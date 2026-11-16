@@ -6,14 +6,17 @@
 //! other tasks and the keyboard get their turn too.
 //!
 //! This is COOPERATIVE multitasking (like early Windows and Mac OS): a task is
-//! never interrupted. Preemptive multitasking would need timer interrupts and
-//! context switching, and real processes would also need separate memory and
-//! user mode - those are not implemented.
+//! never stopped in the middle of a step. Preemptive multitasking would also
+//! need context switching (saving one task's registers and stack and loading
+//! another's) from the timer interrupt, and real processes would need separate
+//! memory and user mode - those are not implemented.
+//!
+//! When no task needs the CPU, the kernel sleeps with `hlt` until the next
+//! interrupt (timer tick or key press), instead of spinning.
 
 use crate::console::Console;
 use crate::statusbar;
-use crate::sysinfo::SystemInfo;
-use crate::rtc;
+use crate::{interrupts, rtc};
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
@@ -22,7 +25,6 @@ use alloc::vec::Vec;
 /// What a task may use during its turn.
 pub struct Context<'a, 'b> {
     pub console: &'a mut Console<'b>,
-    pub info: &'a SystemInfo,
     pub task_count: usize,
 }
 
@@ -32,6 +34,10 @@ pub trait Task {
     fn step(&mut self, ctx: &mut Context<'_, '_>) -> bool;
     /// A short description for the `ps` command.
     fn status(&self) -> String;
+    /// True if the task wants to run continuously (then the kernel must not sleep).
+    fn needs_cpu(&self) -> bool {
+        false
+    }
 }
 
 struct Entry {
@@ -76,6 +82,11 @@ impl Scheduler {
         self.tasks.len()
     }
 
+    /// Does any task want the CPU right now?
+    pub fn needs_cpu(&self) -> bool {
+        self.tasks.iter().any(|e| e.task.needs_cpu())
+    }
+
     pub fn summaries(&self) -> Vec<TaskSummary> {
         self.tasks
             .iter()
@@ -84,9 +95,9 @@ impl Scheduler {
     }
 
     /// Give every task one turn (round-robin), then drop finished tasks.
-    pub fn run_once(&mut self, console: &mut Console<'_>, info: &SystemInfo) {
+    pub fn run_once(&mut self, console: &mut Console<'_>) {
         let task_count = self.tasks.len();
-        let mut ctx = Context { console, info, task_count };
+        let mut ctx = Context { console, task_count };
         for entry in self.tasks.iter_mut() {
             entry.runs += 1;
             entry.alive = entry.task.step(&mut ctx);
@@ -95,19 +106,14 @@ impl Scheduler {
     }
 }
 
-/// How many turns a time-checking task waits between clock reads.
-/// Reading the clock chip is slow, so we do not do it on every turn.
-const CHECK_EVERY: u32 = 500;
-
-/// Updates the status bar once per second.
+/// Updates the status bar once per second (every 100 timer ticks).
 pub struct ClockTask {
-    turns: u32,
-    last_second: u8,
+    last_second: u64,
 }
 
 impl ClockTask {
     pub fn new() -> Self {
-        ClockTask { turns: 0, last_second: 99 }
+        ClockTask { last_second: u64::MAX }
     }
 }
 
@@ -117,13 +123,10 @@ impl Task for ClockTask {
     }
 
     fn step(&mut self, ctx: &mut Context<'_, '_>) -> bool {
-        self.turns = self.turns.wrapping_add(1);
-        if self.turns % CHECK_EVERY == 0 {
-            let now = rtc::now();
-            if now.second != self.last_second {
-                self.last_second = now.second;
-                statusbar::draw_live(ctx.console, ctx.info, now, ctx.task_count);
-            }
+        let second = interrupts::ticks() / interrupts::TIMER_HZ;
+        if second != self.last_second {
+            self.last_second = second;
+            statusbar::draw_live(ctx.console, rtc::now(), second, ctx.task_count);
         }
         true
     }
@@ -133,16 +136,15 @@ impl Task for ClockTask {
     }
 }
 
-/// Blinks the text cursor once per second.
+/// Blinks the text cursor twice per second.
 pub struct CursorTask {
-    turns: u32,
-    last_second: u8,
+    last_half_second: u64,
     visible: bool,
 }
 
 impl CursorTask {
     pub fn new() -> Self {
-        CursorTask { turns: 0, last_second: 99, visible: false }
+        CursorTask { last_half_second: u64::MAX, visible: false }
     }
 }
 
@@ -152,14 +154,11 @@ impl Task for CursorTask {
     }
 
     fn step(&mut self, ctx: &mut Context<'_, '_>) -> bool {
-        self.turns = self.turns.wrapping_add(1);
-        if self.turns % CHECK_EVERY == 0 {
-            let second = rtc::now().second;
-            if second != self.last_second {
-                self.last_second = second;
-                self.visible = !self.visible;
-                ctx.console.set_cursor(self.visible);
-            }
+        let half_second = interrupts::ticks() / (interrupts::TIMER_HZ / 2);
+        if half_second != self.last_half_second {
+            self.last_half_second = half_second;
+            self.visible = !self.visible;
+            ctx.console.set_cursor(self.visible);
         }
         true
     }
@@ -215,6 +214,10 @@ impl Task for PrimesTask {
 
     fn status(&self) -> String {
         format!("{} primes found so far, latest {}", self.found, self.latest)
+    }
+
+    fn needs_cpu(&self) -> bool {
+        true
     }
 }
 

@@ -5,8 +5,7 @@
 
 use crate::allocator;
 use crate::console::{Color, Console, CHAR_WIDTH, MARGIN, STATUS_BAR_HEIGHT};
-use crate::rtc::{self, Time};
-use crate::sysinfo::SystemInfo;
+use crate::rtc::Time;
 use alloc::format;
 
 const TITLE: &str = concat!("BootScope v", env!("CARGO_PKG_VERSION"));
@@ -34,14 +33,13 @@ pub fn draw_boot(console: &mut Console, done: usize, total: usize) {
 }
 
 /// Live status bar, redrawn once per second by the clock task.
-pub fn draw_live(console: &mut Console, info: &SystemInfo, now: Time, task_count: usize) {
+pub fn draw_live(console: &mut Console, now: Time, up: u64, task_count: usize) {
     draw_background(console);
 
     let (heap_used, _, _) = allocator::stats();
     let middle = format!("tasks: {}   heap: {} KiB used", task_count, heap_used / 1024);
     console.draw_text_at(MIDDLE_X, TEXT_Y, &middle, Color::TEXT, Color::PANEL, false);
 
-    let up = rtc::seconds_between(info.boot_time, now);
     let right = format!(
         "{:04}-{:02}-{:02}  {:02}:{:02}:{:02}   up {}:{:02}:{:02}",
         now.year, now.month, now.day, now.hour, now.minute, now.second,

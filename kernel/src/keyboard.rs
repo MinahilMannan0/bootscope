@@ -1,17 +1,11 @@
-//! PS/2 keyboard input using polling.
+//! PS/2 keyboard: turning scancodes into keys.
 //!
-//! The keyboard controller has two I/O ports:
-//!   0x64 = status port: bit 0 is 1 when a byte is waiting for us
-//!   0x60 = data port:   the byte itself (a "scancode")
+//! When a key is pressed, the keyboard controller raises IRQ 1. The interrupt
+//! handler (interrupts.rs) reads the "scancode" from port 0x60 and queues it.
+//! The main loop then gives each scancode to `Keyboard::handle_scancode`.
+//!
 //! A scancode is a number for a physical key, not a letter. Pressing a key
 //! sends one code; releasing it sends the same code + 0x80.
-//! "Polling" means the kernel checks the status port on every pass of its
-//! main loop; between checks it runs the background tasks.
-
-use crate::port::read_port;
-
-const DATA_PORT: u16 = 0x60;
-const STATUS_PORT: u16 = 0x64;
 
 /// A key press the shell cares about.
 pub enum Key {
@@ -29,17 +23,9 @@ impl Keyboard {
         Keyboard { shift: false }
     }
 
-    /// Check the keyboard once, without waiting.
-    /// Returns a key if one was pressed, otherwise None - so the kernel can do
-    /// other work (run tasks) while nobody is typing.
-    pub fn poll_key(&mut self) -> Option<Key> {
-        let scancode = try_read_scancode()?;
-        self.decode(scancode)
-    }
-
     /// Turn a scancode into a Key. Returns None for keys we ignore
     /// (key releases, Ctrl, arrows, F-keys, ...).
-    fn decode(&mut self, scancode: u8) -> Option<Key> {
+    pub fn handle_scancode(&mut self, scancode: u8) -> Option<Key> {
         match scancode {
             0x2A | 0x36 => {
                 self.shift = true; // left or right Shift pressed
@@ -81,16 +67,4 @@ fn scancode_to_chars(scancode: u8) -> Option<(char, char)> {
         _ => return None,
     };
     Some(pair)
-}
-
-/// Read a scancode if the keyboard has one waiting.
-fn try_read_scancode() -> Option<u8> {
-    // SAFETY: ports 0x60/0x64 belong to the PS/2 controller; reading them
-    // has no effect on memory.
-    let status = unsafe { read_port(STATUS_PORT) };
-    if status & 0x01 != 0 {
-        Some(unsafe { read_port(DATA_PORT) })
-    } else {
-        None
-    }
 }

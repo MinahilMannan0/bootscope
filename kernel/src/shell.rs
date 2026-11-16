@@ -8,7 +8,7 @@ use crate::fs::RamFs;
 use crate::keyboard::Key;
 use crate::sysinfo::{region_kind_name, SystemInfo};
 use crate::task::{self, Scheduler};
-use crate::{allocator, integrity, rtc};
+use crate::{allocator, integrity, interrupts, rtc};
 use core::fmt::Write;
 
 const MAX_INPUT: usize = 64; // longest command line we accept
@@ -116,7 +116,10 @@ impl Shell {
             "info" => self.cmd_info(k),
             "mem" => cmd_mem(console, k.info),
             "time" => cmd_time(console),
-            "uptime" => cmd_uptime(console, k.info),
+            "uptime" => cmd_uptime(console),
+            "irq" => cmd_irq(console),
+            "trap" => cmd_trap(console),
+            "crash" => cmd_crash(console, args),
             "integrity" => cmd_integrity(console, k.info, args),
             // Files
             "ls" => self.cmd_ls(console),
@@ -187,6 +190,11 @@ impl Shell {
         let _ = writeln!(console, "  Heap           : {} KiB used, {} KiB free of {} KiB",
             heap_used / 1024, heap_free / 1024, heap_size / 1024);
         let _ = writeln!(console, "  Tasks          : {} background + kernel + shell", k.scheduler.len());
+        let _ = writeln!(console, "  Interrupts     : timer {} Hz ({} ticks), keyboard IRQ 1",
+            interrupts::TIMER_HZ, interrupts::ticks());
+        let b = i.boot_time;
+        let _ = writeln!(console, "  Booted at      : {:04}-{:02}-{:02} {:02}:{:02}:{:02} (CMOS clock)",
+            b.year, b.month, b.day, b.hour, b.minute, b.second);
         let _ = writeln!(console, "  File system    : RAM fs, {} files, {} bytes",
             self.fs.files().len(), self.fs.total_bytes());
         match i.rsdp_addr {
@@ -249,6 +257,8 @@ fn cmd_help(console: &mut Console) {
             ("mem", "Memory map and heap usage"),
             ("time / uptime", "Clock time / time since boot"),
             ("integrity", "Kernel integrity check (educational demo)"),
+            ("irq", "Interrupt statistics"),
+            ("trap / crash yes", "Exception demos: breakpoint / page fault"),
         ]),
         ("Files", &[
             ("ls", "List files"),
@@ -283,7 +293,7 @@ fn cmd_about(console: &mut Console) {
     let _ = writeln!(console, "  {} v{}", crate::OS_NAME, crate::OS_VERSION);
     let _ = writeln!(console, "  A small educational operating system written in Rust.");
     let _ = writeln!(console, "  Boots in QEMU via the bootloader crate; runs bare metal (no_std).");
-    let _ = writeln!(console, "  Operating Systems course project by: Your Name");
+    let _ = writeln!(console, "  Operating Systems course project by: Minahil Mannan");
 }
 
 fn cmd_mem(console: &mut Console, info: &SystemInfo) {
@@ -323,12 +333,45 @@ fn cmd_time(console: &mut Console) {
         t.year, t.month, t.day, t.hour, t.minute, t.second);
 }
 
-fn cmd_uptime(console: &mut Console, info: &SystemInfo) {
-    let seconds = rtc::seconds_between(info.boot_time, rtc::now());
-    let _ = writeln!(console, "Uptime: {}h {}m {}s", seconds / 3600, (seconds / 60) % 60, seconds % 60);
+fn cmd_uptime(console: &mut Console) {
+    let ticks = interrupts::ticks();
+    let seconds = ticks / interrupts::TIMER_HZ;
+    let hundredths = ticks % interrupts::TIMER_HZ;
+    let _ = writeln!(console, "Uptime: {}h {}m {}.{:02}s", seconds / 3600, (seconds / 60) % 60,
+        seconds % 60, hundredths);
     console.set_color(Color::DIM);
-    let _ = writeln!(console, "  (measured with the CMOS real-time clock, 1-second resolution)");
+    let _ = writeln!(console, "  ({ticks} timer interrupts at {} Hz since the timer started)", interrupts::TIMER_HZ);
     console.set_color(Color::TEXT);
+}
+
+fn cmd_irq(console: &mut Console) {
+    console.header("Interrupts");
+    let _ = writeln!(console, "  IDT            : loaded (CPU exceptions + hardware interrupts)");
+    let _ = writeln!(console, "  PIC            : 8259, IRQ 0-15 remapped to vectors 32-47");
+    let _ = writeln!(console, "  Timer, IRQ 0   : {} interrupts, PIT at {} Hz", interrupts::ticks(), interrupts::TIMER_HZ);
+    let _ = writeln!(console, "  Keyboard, IRQ 1: {} interrupts (one per key press and release)", interrupts::keyboard_irqs());
+    let _ = writeln!(console, "  Breakpoints    : {} handled", interrupts::breakpoints());
+}
+
+/// Trigger a breakpoint exception on purpose; the handler counts it and returns.
+fn cmd_trap(console: &mut Console) {
+    let before = interrupts::breakpoints();
+    x86_64::instructions::interrupts::int3();
+    let after = interrupts::breakpoints();
+    console_ok(console, format_args!(
+        "Breakpoint exception (int3) handled by the IDT - kernel continued ({before} -> {after})"));
+}
+
+/// Read from an unmapped address on purpose: page fault -> panic screen.
+fn cmd_crash(console: &mut Console, args: &str) {
+    if args != "yes" {
+        error(console, format_args!("This stops BootScope with a page fault. Type 'crash yes' to confirm."));
+        return;
+    }
+    // SAFETY: not safe at all - deliberately touching unmapped memory to show
+    // how the CPU reports a page fault. The handler stops the kernel.
+    let value = unsafe { core::ptr::read_volatile(0xdead_beef_000 as *const u64) };
+    let _ = writeln!(console, "unexpected: read {value}");
 }
 
 fn cmd_integrity(console: &mut Console, info: &SystemInfo, args: &str) {
@@ -374,8 +417,8 @@ fn cmd_ps(k: &mut Kernel) {
     console.set_color(Color::DIM);
     let _ = writeln!(console, "  PID  NAME      TURNS        STATUS");
     console.set_color(Color::TEXT);
-    let _ = writeln!(console, "    0  kernel    -            main loop: polls keyboard, runs scheduler");
-    let _ = writeln!(console, "    1  shell     -            foreground: runs when a key is pressed");
+    let _ = writeln!(console, "    0  kernel    -            main loop: runs tasks, sleeps (hlt) until an interrupt");
+    let _ = writeln!(console, "    1  shell     -            foreground: runs when a key interrupt arrives");
     for s in summaries {
         let _ = writeln!(console, "  {:>3}  {:<8}  {:<11}  {}", s.pid, s.name, s.runs, s.status);
     }

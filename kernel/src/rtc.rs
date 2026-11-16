@@ -22,12 +22,6 @@ pub struct Time {
     pub second: u8,
 }
 
-impl Time {
-    fn seconds_of_day(&self) -> u32 {
-        self.hour as u32 * 3600 + self.minute as u32 * 60 + self.second as u32
-    }
-}
-
 fn read_register(register: u8) -> u8 {
     // SAFETY: 0x70/0x71 are the standard CMOS clock ports. Selecting a register
     // below 0x80 and reading it does not change any memory.
@@ -89,16 +83,5 @@ pub fn now() -> Time {
         day: decode(raw[3]),
         month: decode(raw[4]),
         year: 2000 + decode(raw[5]) as u16,
-    }
-}
-
-/// Seconds from `start` to `end`. Handles passing midnight once
-/// (so it is correct for uptimes under 24 hours).
-pub fn seconds_between(start: Time, end: Time) -> u32 {
-    let (s, e) = (start.seconds_of_day(), end.seconds_of_day());
-    if e >= s {
-        e - s
-    } else {
-        e + 86_400 - s
     }
 }
