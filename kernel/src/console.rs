@@ -26,6 +26,7 @@ impl Color {
     pub const ACCENT: Color = Color { r: 80, g: 200, b: 230 };
     pub const OK: Color = Color { r: 90, g: 210, b: 120 };
     pub const DIM: Color = Color { r: 130, g: 140, b: 155 };
+    pub const ERROR: Color = Color { r: 235, g: 95, b: 95 };
 }
 
 pub struct Console<'a> {

@@ -3,11 +3,14 @@
 
 mod console;
 mod keyboard;
+mod shell;
+
 use bootloader_api::info::PixelFormat;
 use bootloader_api::{entry_point, BootInfo};
 use console::{Color, Console};
 use core::fmt::Write;
-use keyboard::{Key, Keyboard};
+use keyboard::Keyboard;
+use shell::Shell;
 
 const OS_NAME: &str = "BootScope";
 const OS_VERSION: &str = "0.1.0";
@@ -54,26 +57,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     console.set_color(Color::TEXT);
     let _ = writeln!(console, "\n  Display : {} x {} pixels, {}, {} bytes/pixel",
         info.width, info.height, format, info.bytes_per_pixel);
-    let _ = writeln!(console, "  Target  : x86_64, bare metal (no_std)");
+    let _ = writeln!(console, "  Target  : x86_64, bare metal (no_std)\n");
 
     ok(&mut console, "Keyboard ready (PS/2, polling mode)");
 
-    console.set_color(Color::ACCENT);
-    let _ = writeln!(console, "\n  Welcome to BootScope! Keyboard test - type something:");
-    console.set_color(Color::TEXT);
-    let _ = write!(console, "> ");
-
     let mut keyboard = Keyboard::new();
+    let mut shell = Shell::new();
+    ok(&mut console, "Command shell ready");
+
+    console.set_color(Color::ACCENT);
+    let _ = writeln!(console, "\n  Welcome to BootScope! Type 'help' to see the commands.\n");
+    shell.prompt(&mut console);
+
+    // Main loop: wait for a key, give it to the shell, repeat forever.
     loop {
-        match keyboard.read_key() {
-            Key::Char(c) => {
-                let _ = write!(console, "{c}");
-            }
-            Key::Enter => {
-                let _ = write!(console, "\n> ");
-            }
-            Key::Backspace => console.backspace(),
-        }
+        let key = keyboard.read_key();
+        shell.handle_key(key, &mut console);
     }
 }
 
